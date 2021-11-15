@@ -1,0 +1,393 @@
+//@version=4
+study(title="IKH Signals v2", shorttitle="IKH Signals v2", overlay=true, max_bars_back = 4900)
+//INPUTS
+// 1_ichimoku.ps
+input_show_ichimoku = input(title="Display ichimoky", type=input.bool, defval=true)
+
+input_useMTF = input(title="Use Major Trend Confirmation", type=input.bool, defval=false)
+input_res = input(title="Major Trend Resolution", type=input.resolution, defval="60")
+
+// user inputs    
+input_showKoutenBuy = input(title="Show Sanyaku Kouten",defval=true)
+input_showGyakutenSell = input(title="Show Sanyaku Gyakuten", defval=true)
+input_showBuy = input(title="Show Buy", defval=true)
+input_showSell = input(title="Show Sell",defval=true)
+
+
+//color inputs
+input_colorBar = input(title="Color bar if trending between signals",defval=true)
+color input_bullishBarTrend = input(color.white, "Bullish colors between signals", type = input.color)
+color input_bearishBarTrend = input(color.white, "Bearish colors between signals", type = input.color)
+
+// 2_exit.ps
+input_showExit = input(title="Show Exit",defval=false)
+
+input_useExitMTF = input(title="Use Major Trend to trigger Exit ?", type=input.bool, defval=false)
+
+const_cross_Tenkan_and_Kijun_exit = "Tenkan and Kijun cross"
+const_Kijun_Flat_exit = "Kijun Flat"
+const_SSA_Flat_exit = "SSA Flat"
+const_Kijun_or_SSA_Flat_exit = "SSA or Kijun Flat"
+
+input_exit = input(title="Choice exit type", defval=const_cross_Tenkan_and_Kijun_exit, options=[const_cross_Tenkan_and_Kijun_exit, const_Kijun_Flat_exit, const_SSA_Flat_exit, const_Kijun_or_SSA_Flat_exit])
+
+// END INPUTS
+
+
+//FUNCTIONS
+// 1_base.ps
+// line lineDeviation from a specific period
+// used to smooth the curve & avoid fakes when market
+// momemtum is strong
+lineDeviation(line, period) =>
+    value = abs(line)
+    averageIndicator = sma(value,period)
+    standardDeviation = stdev(value,period)
+    upperBand = averageIndicator + (2 * standardDeviation)
+    lowerBand = averageIndicator - (2 * standardDeviation)
+    ((value - lowerBand) / (upperBand - lowerBand)) * 100
+
+getDiffAsPercent(v1, v2) => 
+    (abs(v1 - v2) / ((v1 + v2)/2)) * 100
+
+getSlope(src, period) =>
+    y = abs(src - nz(src[period - 1]))
+    rad = atan(y/period)
+    (rad * (180 / 3.141))
+
+// Get value for an element(function/var) for a specified TF and index
+get_value(element, tf, idx) => security(syminfo.tickerid, tf, element[idx], lookahead=false)
+
+// 2_price_action.ps
+//price action
+// this piece of code get last low & high and save it as a serie
+// reset looking each 9 periods with no new lowerhigh or lowerlow
+getLowerLowAndHighHigh() =>
+    var float lastLL = high
+    var float lastHH = low
+
+    if low < lastLL
+        lastLL := low
+
+    if lowest(low,9) > lastLL
+        lastLL := high
+        
+    if high > lastHH
+        lastHH := high
+
+    if highest(high,9) < lastHH
+        lastHH := low
+    
+    [lastLL, lastHH]
+
+isLowBreakoutOrHighBreakout(serie, period) =>
+    [lastLL, lastHH] = getLowerLowAndHighHigh()
+    highBreakout = (serie > highest(lastHH, period)[1]) or (serie > serie[1] and serie[1] >= lastHH)
+    lowBreakout  = (serie < lowest(lastLL, period)[1])
+
+    [lowBreakout, highBreakout]
+
+// 3_ichimoku_direction.ps
+isIchimokuBullishDirection(closePrice, highPrice, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine) =>
+    price_above_kumo = closePrice > SSB[chikouSpanPeriods - 1]
+    cs_above_candles = closePrice > highPrice[chikouSpanPeriods - 1]
+    cs_above_kumo = closePrice > SSA[kumoPeriods - 1] and closePrice > SSB[kumoPeriods - 1]
+    tk_above_ks = tkLine >= ksLine 
+    kumo_up = SSA > SSB
+
+    price_above_kumo and cs_above_kumo and cs_above_candles and tk_above_ks and kumo_up
+
+isIchimokuBearishDirection(closePrice, lowPrice, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine) =>
+    price_below_kumo = closePrice < SSB[chikouSpanPeriods - 1]
+    cs_below_candles = closePrice < lowPrice[chikouSpanPeriods - 1]
+    cs_below_kumo = closePrice < SSA[kumoPeriods - 1] and closePrice < SSB[kumoPeriods - 1] 
+    tk_below_ks = tkLine <= ksLine 
+    kumo_down = SSA < SSB
+
+    cs_below_kumo and kumo_down and tk_below_ks and cs_below_candles and price_below_kumo
+
+
+// 0 = Ranging, 1 = Bullish, -1 = Bearish
+getIchimokuDirection(closePrice, highPrice, lowPrice, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine) =>
+    direction = 0
+    if isIchimokuBullishDirection(closePrice, highPrice, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine)
+        direction := 1
+    if isIchimokuBearishDirection(closePrice, lowPrice, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine)
+        direction := -1
+    direction
+// 4_ichimoku_momentum.ps
+isIchimokuBullishMomentum(ksLine, SSA, SSB, chikouSpanPeriods) =>
+    ks_up = rising(ksLine,1)
+    SSA_up = rising(SSA,1)
+    SSB_up = rising(SSB,1)
+
+    (SSA_up or SSB_up) and ks_up
+
+isIchimokuBearishMomentum(ksLine, SSA, SSB, chikouSpanPeriods) => 
+    ks_down = falling(ksLine,1)
+    SSA_down = falling(SSA,1)
+    SSB_down = falling(SSB,1)
+
+    (SSB_down or SSA_down) and ks_down
+
+// 0 = Ranging, 1 = Bullish, -1 = Bearish
+getIchimokuMomentum(ksLine, SSA, SSB, chikouSpanPeriods) =>
+    momentum = 0
+    if(isIchimokuBullishMomentum(ksLine, SSA, SSB, chikouSpanPeriods))
+        momentum := 1
+    if(isIchimokuBearishMomentum(ksLine, SSA, SSB, chikouSpanPeriods))
+        momentum := -1
+    momentum
+// 5_ichimoku_strenght.ps
+getSenkoSpanAngle(senkoSpan, period) => 
+     cmo(senkoSpan, period)
+
+getKumoTickness(SSA, SSB, period) =>
+    SSB>SSA ? ((SSB-SSA)/sum(SSB-SSA,period))*100 : ((SSA-SSB)/sum(SSA-SSB,period))*100
+
+isKumoThicknessStableOrGrowing(tickness, lookBack) =>
+    rising(tickness, lookBack)
+// 6_exit.ps
+getCorrectBullishAndBearishExitFromInput(tkLine, ksLine, SSA) =>
+    bullishExit = false
+    bearishExit = false
+
+    if input_exit == const_cross_Tenkan_and_Kijun_exit
+        bullishExit := crossunder(tkLine, ksLine)
+        bearishExit := crossover(tkLine, ksLine)
+    
+    if input_exit == const_Kijun_Flat_exit
+        bullishExit := ksLine == ksLine[1]
+        bearishExit := ksLine == ksLine
+
+    if input_exit == const_SSA_Flat_exit
+        bullishExit := SSA == SSA[1]
+        bearishExit := SSA == SSA[1]
+
+    if input_exit == const_Kijun_or_SSA_Flat_exit
+        bullishExit := SSA == SSA[1] or ksLine == ksLine[1]
+        bearishExit := SSA == SSA[1] or ksLine == ksLine[1]
+
+    [bullishExit, bearishExit]
+// END FUNCTIONS
+
+
+//VARIABLES
+// 1_base.ps
+// all ICHIMOKU variables
+tkPeriods = 9
+ksPeriods = 26
+kumoPeriods = 52
+chikouSpanPeriods = 26
+donchian(len) => avg(lowest(len), highest(len))
+tkLine = donchian(tkPeriods)
+ksLine = donchian(ksPeriods)
+SSA = avg(tkLine, ksLine)
+SSB = donchian(kumoPeriods)
+
+// all ICHIMOKU variables for mtf
+donchian_mtf(len) => avg(get_value(lowest(len),input_res, 0), get_value(highest(len),input_res, 0))
+tkLine_mtf = donchian_mtf(tkPeriods)
+ksLine_mtf = donchian_mtf(ksPeriods)
+SSA_mtf = avg(tkLine_mtf, ksLine_mtf)
+SSB_mtf = donchian_mtf(kumoPeriods)
+close_mtf = get_value(close,input_res, 0) 
+low_mtf = get_value(low,input_res, 0) 
+high_mtf = get_value(high,input_res, 0) 
+// 2_calculated.ps
+//kumo thickness
+kumo_thickness  = getKumoTickness(SSA, SSB, chikouSpanPeriods)
+SSA_slope_diff = getSenkoSpanAngle(SSA, chikouSpanPeriods)
+SSB_slope_diff = getSenkoSpanAngle(SSB, chikouSpanPeriods)
+weak_tickness = kumo_thickness >= 2 and isKumoThicknessStableOrGrowing(kumo_thickness, 1)
+strong_tickness = kumo_thickness >= 6 and isKumoThicknessStableOrGrowing(kumo_thickness, 2)
+is_kumo_bullish_slope_rising = SSA_slope_diff > 0 and SSB_slope_diff > 0 
+is_kumo_bearish_slope_rising = SSA_slope_diff < 0 and SSB_slope_diff < 0 
+is_kumo_bullish_strong_slope_rising = SSA_slope_diff >= 30 and SSB_slope_diff >= 15 
+is_kumo_bearish_strong_slope_rising = SSA_slope_diff <= -30 and SSB_slope_diff <= -15 
+
+//price action
+doji = (abs(close - open) / syminfo.mintick <= 15)
+[shortLowBreakout, shortHighBreakout] = isLowBreakoutOrHighBreakout(close, tkPeriods)
+
+//get momentum & direction
+momentum = getIchimokuMomentum(ksLine, SSA, SSB, chikouSpanPeriods)
+direction = getIchimokuDirection(close, high, low, SSA, SSB, chikouSpanPeriods, kumoPeriods, tkLine, ksLine)
+
+//get momentum & direction du trend resolution
+mtf_momentum = getIchimokuMomentum(ksLine_mtf, SSA_mtf, SSB_mtf, chikouSpanPeriods)
+mtf_direction = getIchimokuDirection(close_mtf, high_mtf, low_mtf, SSA_mtf, SSB_mtf, chikouSpanPeriods, kumoPeriods, tkLine_mtf, ksLine_mtf)
+
+//mtf Confirmation
+bullish_mtf = mtf_direction > 0 //and mtf_momentum > 0
+bearish_mtf = mtf_direction < 0 //and mtf_momentum < 0
+
+//bullish and bearish
+bullishKTS = SSA > SSB and momentum > 0 and high > low
+bearishKTS = SSA < SSB and momentum < 0 and low < high
+
+// use some calculated variable to know if market can show a bullish or bearish signal
+bullish = direction > 0 and momentum > 0 and not doji and (weak_tickness and is_kumo_bullish_slope_rising)
+bearish = direction < 0 and momentum < 0 and not doji and (is_kumo_bearish_slope_rising and weak_tickness)
+
+// apply if user select MTF bullish or bearish
+bullish := input_useMTF ? bullish and bullish_mtf : bullish
+bearish := input_useMTF ? bearish and bearish_mtf : bearish
+
+// add kumo and tenkan information to know if the signal is strong or not
+strongBullish = bullish and (strong_tickness and is_kumo_bullish_strong_slope_rising) and shortHighBreakout
+strongBearish = bearish and (strong_tickness and is_kumo_bearish_strong_slope_rising) and shortLowBreakout
+
+//exits
+// used to end a period of trending. When a exit signal is trigerred a new buy or sell signals can be show again
+exitUpTiming = false
+exitDownTiming = false
+
+if input_useExitMTF
+    [up, down] = getCorrectBullishAndBearishExitFromInput(tkLine_mtf, ksLine_mtf, SSA_mtf)
+    exitUpTiming := up
+    exitDownTiming := down
+else
+    [up, down] = getCorrectBullishAndBearishExitFromInput(tkLine, ksLine, SSA)
+    exitUpTiming := up
+    exitDownTiming := down
+// 3_sanyaku.ps
+// syanaku cpt, used to know if a Sanyaku is forming ( syanaku signal >= 3)
+var sanyakuKoutenCount = 0
+var sanyakuGyakutenCount = 0
+
+// Sanyakukouten variable
+isGoldCross = crossover(tkLine, ksLine)
+cs_above_candles = close > high[chikouSpanPeriods - 1]
+tk_up = rising(lineDeviation(tkLine, tkPeriods),1)
+ks_up = rising(lineDeviation(ksLine, ksPeriods),1)
+cs_crossover_candles = crossover(close, high[chikouSpanPeriods - 1])
+tk_above_ks = tkLine > ksLine 
+close_crossover_kumo = (crossover(close, SSB[chikouSpanPeriods - 1]) and close > SSA[chikouSpanPeriods - 1]) or (crossover(close, SSA[chikouSpanPeriods - 1]) and close > SSB[chikouSpanPeriods - 1])
+
+// SanyakuGyakuten variable
+isDeadCross = crossunder(tkLine, ksLine)
+cs_below_candles = close < low[chikouSpanPeriods - 1]
+tk_down = falling(lineDeviation(tkLine, tkPeriods),1)
+ks_down = falling(lineDeviation(ksLine,ksPeriods),1)
+tk_below_ks = tkLine < ksLine 
+cs_crossunder_candles = crossunder(close, low[chikouSpanPeriods - 1])
+close_crossunder_kumo = (crossunder(close, SSB[chikouSpanPeriods - 1]) and close < SSA[chikouSpanPeriods - 1]) or (crossunder(close, SSA[chikouSpanPeriods - 1]) and close < SSB[chikouSpanPeriods - 1])
+
+// Sanyakukouten logic
+if(isGoldCross and cs_below_candles and tk_up and sanyakuKoutenCount == 0)
+    sanyakuKoutenCount := sanyakuKoutenCount + 1
+else 
+    if(isDeadCross and sanyakuKoutenCount > 0)
+        sanyakuKoutenCount := 0
+        
+if(cs_crossover_candles and tk_above_ks and sanyakuKoutenCount == 1)
+    sanyakuKoutenCount := sanyakuKoutenCount + 1
+else 
+    if(cs_crossunder_candles and sanyakuKoutenCount > 1)
+        sanyakuKoutenCount := 1
+        
+if(close_crossover_kumo and tk_up and ks_up and sanyakuKoutenCount == 2 and is_kumo_bullish_slope_rising)
+    sanyakuKoutenCount := sanyakuKoutenCount + 1
+else 
+    if(close_crossunder_kumo and sanyakuKoutenCount > 2)
+        sanyakuKoutenCount := 2
+
+// SanyakuGyakuten logic
+if(isDeadCross and sanyakuGyakutenCount == 0)
+    sanyakuGyakutenCount := sanyakuGyakutenCount + 1
+else 
+    if(isGoldCross and sanyakuGyakutenCount > 0)
+        sanyakuGyakutenCount := 0
+        
+if(cs_crossunder_candles and tk_below_ks and sanyakuGyakutenCount == 1)
+    sanyakuGyakutenCount := sanyakuGyakutenCount + 1
+else 
+    if(cs_crossover_candles and sanyakuGyakutenCount > 1)
+        sanyakuGyakutenCount := 1
+        
+if(close_crossunder_kumo and tk_down and ks_down and sanyakuGyakutenCount == 2 and is_kumo_bearish_slope_rising)
+    sanyakuGyakutenCount := sanyakuGyakutenCount + 1
+else 
+    if(close_crossover_kumo and sanyakuGyakutenCount > 2)
+        sanyakuGyakutenCount := 2
+
+// END VARIABLES
+
+
+//DISPLAY
+// 1_plop_ichimoku.ps
+//PLOT ICHIMOKU
+plot(tkLine, color=input_show_ichimoku ? #ff9800 : na, title="Tenkan-sen")
+plot(ksLine, color=input_show_ichimoku ? #2196f3 : na, title="Kijun-sen")
+plot(close, offset = -chikouSpanPeriods + 1, color=input_show_ichimoku ? #ffffff : na, title="Chikou Span")
+p1 = plot(SSA, offset = chikouSpanPeriods - 1, color=input_show_ichimoku ? color.green : na,
+	 title="SSA", display=display.none)
+p2 = plot(SSB, offset = chikouSpanPeriods - 1, color=input_show_ichimoku ? color.red : na,
+	 title="SSB", display=display.none)
+fill(p1, p2, color = input_show_ichimoku ? (SSA > SSB ? #b2b5be : #434651) : na, transp=50)
+
+// 2_labels_conditions.ps
+//labels variables
+// Variables used to know if a signals can be shown
+var int upIndex = 0
+var int exitUpIndex = 0
+
+var int downIndex = 0
+var int exitDownIndex = 0
+
+//display variables
+shouldDisplayBullishSignal = upIndex <= exitUpIndex
+shouldDisplayBearishSignal = downIndex <= exitDownIndex
+isExitBullishSignals = (input_showKoutenBuy or input_showBuy) and exitUpTiming and upIndex > exitUpIndex
+isExitBearishSignals = (input_showGyakutenSell or input_showSell) and exitDownTiming and downIndex > exitDownIndex
+isSell = input_showSell and bearish and sanyakuGyakutenCount < 3 and shouldDisplayBearishSignal
+isGyakutenSell = input_showGyakutenSell and sanyakuGyakutenCount >= 3 and shouldDisplayBearishSignal
+isBuy = input_showBuy and bullish and sanyakuKoutenCount < 3 and shouldDisplayBullishSignal
+isKoutenBuy = input_showKoutenBuy and sanyakuKoutenCount >= 3 and shouldDisplayBullishSignal
+
+// END DISPLAY
+
+
+//STRATEGY
+// Ikh-signal-v2.ps
+alertcondition(condition=isGyakutenSell,title="Sanyaku Kouten")
+alertcondition(condition=isSell and not strongBearish,title="Sell or Strong sell")
+alertcondition(condition=isKoutenBuy, title="Sanyaku Gyakuten")
+alertcondition(condition=isBuy and not strongBullish,title="Buy or Strong buy")
+alertcondition(condition=isExitBullishSignals,title="Exit Buy")
+alertcondition(condition=isExitBearishSignals,title="Exit Sell")
+
+if (isSell)
+    label.new(bar_index, high, strongBearish ? "Strong Sell" : "Sell", yloc=yloc.abovebar, color=color.red, style=label.style_labeldown)
+    downIndex := downIndex + 1
+
+if (isGyakutenSell)
+    label.new(bar_index, high, "Sanyaku Gyakuten", yloc=yloc.abovebar, color=color.red, style=label.style_labeldown)
+    downIndex := downIndex + 1
+    sanyakuGyakutenCount := 0
+
+if(isBuy)
+    label.new(bar_index, low, strongBullish ? "Strong Buy" : "Buy", yloc=yloc.belowbar, color=color.green, style=label.style_labelup)
+    upIndex := upIndex + 1
+    
+if (isKoutenBuy)
+    label.new(bar_index, low, "Sanyaku Kouten", yloc=yloc.belowbar, color=color.green, style=label.style_labelup)
+    upIndex := upIndex + 1
+    sanyakuKoutenCount := 0
+    
+if(isExitBullishSignals)
+    if(input_showExit)
+        label.new(bar_index, low, "Exit", yloc=yloc.belowbar, color=color.green, style=label.style_labelup)
+    exitUpIndex := exitUpIndex + 1
+        
+if(isExitBearishSignals)
+    if(input_showExit)
+        label.new(bar_index, high, "Exit", yloc=yloc.abovebar, color=color.red, style=label.style_labeldown)
+    exitDownIndex := exitDownIndex + 1
+    
+//bar color
+barcolor(((input_showKoutenBuy or input_showBuy) and input_colorBar and bullishKTS and upIndex > exitUpIndex) ? input_bullishBarTrend : na)
+barcolor(((input_showGyakutenSell or input_showSell) and input_colorBar and bearishKTS and downIndex > exitDownIndex) ? input_bullishBarTrend : na)
+
+// END STRATEGY
