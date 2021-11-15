@@ -1,0 +1,149 @@
+// @version=4
+// @author=Daveatt - BEST
+
+// ABCD Pattern Screener
+
+StudyName        = "BEST ABCD Pattern Screener"
+ShortStudyName   = "BEST ABCD Pattern Screener" 
+study(StudyName, shorttitle=ShortStudyName, overlay=false, precision=6)
+
+filterBW = input(true, title="filter Bill Williams Fractals?")
+
+
+string sec00 = input(defval="BINANCE:BATUSDT", type=input.symbol)
+string sec01 = input(defval="BINANCE:MATICUSDT", type=input.symbol)
+string sec02 = input(defval="BINANCE:UNIUSDT", type=input.symbol)
+string sec03 = input(defval="BINANCE:MANAUSDT", type=input.symbol)
+string sec04 = input(defval="BINANCE:SLPUSDT", type=input.symbol)
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////// UTILITIES ///////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+//  ||-----------------------------------------------------------------------------------------------------||
+//  ||---   Fractal Recognition Functions:  ---------------------------------------------------------------||
+isRegularFractal(mode, _high, _low) =>
+    ret = mode == 1 ? _high[4] < _high[3] and _high[3] < _high[2] and _high[2] > _high[1] and _high[1] > _high[0] :
+     mode == -1 ? _low[4] > _low[3] and _low[3] > _low[2] and _low[2] < _low[1] and _low[1] < _low[0] : false
+
+isBWFractal(mode, _high, _low) =>
+    ret = mode == 1 ? _high[4] < _high[2] and _high[3] <= _high[2] and _high[2] >= _high[1] and _high[2] > _high[0] :
+     mode == -1 ? _low[4] > _low[2] and _low[3] >= _low[2] and _low[2] <= _low[1] and _low[2] < _low[0] : false
+
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+////////////////////////////// ABCD PATTERN ///////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////
+
+f_securitys(_ticker)=>
+
+    _r = timeframe.period
+    _g = barmerge.gaps_off
+    _l = barmerge.lookahead_on
+
+    _high = security(symbol=_ticker, resolution=_r, expression=high, gaps=_g, lookahead=_l)
+    _low = security(symbol=_ticker, resolution=_r, expression=low, gaps=_g, lookahead=_l)
+
+    filteredtopf = filterBW ? isRegularFractal(1, _high, _low) : isBWFractal(1, _high, _low)
+    filteredbotf = filterBW ? isRegularFractal(-1, _high, _low) : isBWFractal(-1, _high, _low)
+
+    //  ||---   ZigZag:
+    istop = filteredtopf
+    isbot = filteredbotf
+    topcount = barssince(istop)
+    botcount = barssince(isbot)
+
+    zigzag = (istop and topcount[1] > botcount[1] ? _high[2] :
+     isbot and topcount[1] < botcount[1] ? _low[2] : na)
+
+    x = valuewhen(zigzag, zigzag, 4) 
+    a = valuewhen(zigzag, zigzag, 3) 
+    b = valuewhen(zigzag, zigzag, 2) 
+    c = valuewhen(zigzag, zigzag, 1) 
+    d = valuewhen(zigzag, zigzag, 0)
+
+    xab = (abs(b-a)/abs(x-a))
+    xad = (abs(a-d)/abs(x-a))
+    abc = (abs(b-c)/abs(a-b))
+    bcd = (abs(c-d)/abs(b-c))
+
+    // ABCD Part
+    _abc = abc >= 0.382 and abc <= 0.886
+    _bcd = bcd >= 1.13 and bcd <= 2.618
+    
+    _bull_abcd = _abc and _bcd and d < c 
+    _bear_abcd = _abc and _bcd and d > c
+
+    _bull   = _bull_abcd and not _bull_abcd[1]
+    _bear   = _bear_abcd and not _bear_abcd[1]
+
+    _color = iff(_bull, color.new(color.green, 0),
+     iff(_bear, color.new(color.red, 0), color.new(color.aqua, 70)))
+
+    [_bull, _bear, _color]
+
+lapos_x = timenow + round(change(time)*12)
+
+//f_color_label(_stackPos) => _stackPos ? color.new(color.green, 30) : color.new(color.red, 30)
+
+f_geom(_pr_a, _id, _color)=>
+
+
+    var label la = na
+    var counter = 0
+    counter := counter + 1
+    str_counter = ""//tostring(counter, "#") + ": "
+    label.delete(la)
+    la := label.new(
+             x=lapos_x, y=ceil(_pr_a),
+             text=str_counter + _id, xloc=xloc.bar_time, yloc=yloc.price, color=_color,
+             style=label.style_labeldown, textcolor=color.black, size=size.small
+             )
+
+
+[s00_bull, s00_bear, s00_color]  = f_securitys(sec00)
+[s01_bull, s01_bear, s01_color]  = f_securitys(sec01)
+[s02_bull, s02_bear, s02_color]  = f_securitys(sec02)
+[s03_bull, s03_bear, s03_color]  = f_securitys(sec03)
+[s04_bull, s04_bear, s04_color]  = f_securitys(sec04)
+
+// [s05_price_a_rate, s05_bull, s05_bear, s05_twoEmaUp, s05_twoEmaDn, s05_color]  = f_securitys(sec05)
+// [s06_price_a_rate, s06_bull, s06_bear, s06_twoEmaUp, s06_twoEmaDn, s06_color]  = f_securitys(sec06)
+// [s07_price_a_rate, s07_bull, s07_bear, s07_twoEmaUp, s07_twoEmaDn, s07_color]  = f_securitys(sec07)
+// [s08_price_a_rate, s08_bull, s08_bear, s08_twoEmaUp, s08_twoEmaDn, s08_color]  = f_securitys(sec08)
+// [s09_price_a_rate, s09_bull, s09_bear, s09_twoEmaUp, s09_twoEmaDn, s09_color]  = f_securitys(sec09)
+
+plotshape(s00_bull or s00_bear ? 0 : na , title='Square 1', style=shape.square, location=location.absolute, color=s00_color, size = size.tiny, offset=-2)
+
+plotchar(not s00_bull and not s00_bear ? 0 : na, 
+ char='-',location=location.absolute, color=s00_color, size = size.normal)
+
+plotshape(s01_bull or s01_bear ? 1 : na , title='Square 2', style=shape.square, location=location.absolute, color=s01_color, size = size.tiny, offset=-2)
+
+plotchar(not s01_bull and not s01_bear ? 1 : na, 
+ char='-',location=location.absolute, color=s01_color, size = size.normal)
+
+plotshape(s02_bull or s02_bear? 2 : na , title='Square 3', style=shape.square, location=location.absolute, color=s02_color, size = size.tiny, offset=-2)
+
+plotchar(not s02_bull and not s02_bear  ? 2 : na, 
+ char='-',location=location.absolute, color=s02_color, size = size.normal)
+
+plotshape(s03_bull or s03_bear ? 3 : na , title='Square 4', style=shape.square, location=location.absolute, color=s03_color, size = size.tiny, offset=-2)
+
+plotchar(not s03_bull and not s03_bear ? 3 : na, 
+ char='-',location=location.absolute, color=s03_color, size = size.normal)
+
+plotshape(s04_bull or s04_bear ? 4 : na , title='Square 5', style=shape.square, location=location.absolute, color=s04_color, size = size.tiny, offset=-2)
+
+plotchar(not s04_bull and not s04_bear ? 4 : na, 
+ char='-',location=location.absolute, color=s04_color, size = size.normal)
+
+// right labels
+f_geom(0, sec00, s00_color)
+f_geom(1, sec01, s01_color)
+f_geom(2, sec02, s02_color)
+f_geom(3, sec03, s03_color)
+f_geom(4, sec04, s04_color)
